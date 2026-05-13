@@ -1,0 +1,826 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>NYU Graduation Adventure 🎓</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #1a3a1a;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    font-family: 'Courier New', monospace;
+    overflow: hidden;
+  }
+  #title {
+    color: #f5d76e;
+    font-size: 20px;
+    font-weight: bold;
+    margin-bottom: 8px;
+    text-shadow: 2px 2px 0 #57106e;
+    letter-spacing: 2px;
+  }
+  #gameWrap {
+    position: relative;
+    border: 5px solid #57106e;
+    border-radius: 6px;
+    box-shadow: 0 0 40px rgba(87,16,110,0.7), 0 0 80px rgba(87,16,110,0.3);
+  }
+  canvas { display: block; }
+  #hud {
+    position: absolute;
+    top: 8px; left: 0; right: 0;
+    display: flex;
+    justify-content: center;
+    gap: 6px;
+    pointer-events: none;
+  }
+  .step {
+    background: rgba(0,0,0,0.5);
+    border: 2px solid rgba(255,255,255,0.3);
+    border-radius: 20px;
+    padding: 3px 10px;
+    font-size: 10px;
+    color: rgba(255,255,255,0.5);
+    font-family: 'Courier New', monospace;
+    transition: all 0.3s;
+  }
+  .step.done { background: #3a8a3a; border-color: #5eca5e; color: #fff; }
+  .step.active { background: #57106e; border-color: #c040e0; color: #f5d76e; font-weight: bold; }
+  #dialogue {
+    position: absolute;
+    bottom: 8px; left: 8px; right: 8px;
+    background: #fffde8;
+    border: 3px solid #57106e;
+    border-radius: 10px;
+    padding: 10px 14px;
+    font-size: 13px;
+    color: #2a1a00;
+    line-height: 1.6;
+    display: none;
+    font-family: 'Courier New', monospace;
+    min-height: 72px;
+  }
+  #dialogue .speaker {
+    font-weight: bold;
+    color: #57106e;
+    font-size: 11px;
+    margin-bottom: 3px;
+  }
+  #dialogue .prompt {
+    font-size: 10px;
+    color: #888;
+    text-align: right;
+    margin-top: 4px;
+  }
+  #controls-hint {
+    position: absolute;
+    bottom: 10px; right: 10px;
+    background: rgba(0,0,0,0.4);
+    border-radius: 6px;
+    padding: 4px 8px;
+    font-size: 10px;
+    color: rgba(255,255,255,0.6);
+    pointer-events: none;
+  }
+  #win-screen {
+    position: absolute;
+    inset: 0;
+    background: rgba(87,16,110,0.92);
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    color: #f5d76e;
+    font-family: 'Courier New', monospace;
+    text-align: center;
+  }
+  #win-screen h1 { font-size: 28px; margin-bottom: 12px; }
+  #win-screen p  { font-size: 14px; line-height: 1.8; color: #fff; }
+  #win-screen .hearts { font-size: 30px; margin-top: 14px; animation: pulse 1s infinite; }
+  @keyframes pulse { 0%,100%{transform:scale(1)} 50%{transform:scale(1.2)} }
+</style>
+</head>
+<body>
+<div id="title">🎓 NYU GRADUATION ADVENTURE 💜</div>
+<div id="gameWrap">
+  <canvas id="c" width="640" height="480"></canvas>
+  <div id="hud">
+    <div class="step active" id="s0">📚 Bookstore</div>
+    <div class="step" id="s1">🏫 Paulson Center</div>
+    <div class="step" id="s2">📖 Bobst Library</div>
+    <div class="step" id="s3">🌳 WSP Arch</div>
+  </div>
+  <div id="dialogue">
+    <div class="speaker" id="dlg-speaker"></div>
+    <div id="dlg-text"></div>
+    <div class="prompt">[ SPACE to continue ]</div>
+  </div>
+  <div id="controls-hint">Arrow Keys: Move &nbsp;|&nbsp; Space: Interact</div>
+  <div id="win-screen">
+    <h1>🎓 CONGRATULATIONS! 🎓</h1>
+    <p>You walked across Washington Square Park,<br>
+       stepped under the iconic NYU arch,<br>
+       and leapt into the air — a <strong style="color:#f5d76e">NYU GRADUATE!</strong><br><br>
+       You picked up your textbooks, went to class,<br>
+       studied hard at Bobst, and made it through.<br><br>
+       <strong style="color:#f5d76e">So proud of you! 💜</strong>
+    </p>
+    <div class="hearts">💜 🎓 💜</div>
+  </div>
+</div>
+
+<script>
+// ─── Canvas & Context ─────────────────────────────────────────────────────────
+const canvas = document.getElementById('c');
+const ctx    = canvas.getContext('2d');
+const W = 640, H = 480;
+
+// ─── Input ────────────────────────────────────────────────────────────────────
+const keys = {};
+let spaceJustPressed = false;
+window.addEventListener('keydown', e => {
+  if (!keys[e.key] && e.key === ' ') spaceJustPressed = true;
+  keys[e.key] = true;
+  if ([' ','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key)) e.preventDefault();
+});
+window.addEventListener('keyup', e => { keys[e.key] = false; });
+
+// ─── Game State ───────────────────────────────────────────────────────────────
+let state = 'playing'; // 'playing' | 'dialogue' | 'celebrating' | 'won'
+let progress = 0;      // 0=bookstore, 1=paulson, 2=bobst, 3=arch
+let dialogueQueue = [];
+let dialoguePage  = 0;
+let celebrateTimer = 0;
+let jumpY = 0;
+let jumpVel = 0;
+let jumpCount = 0;
+let winTimer = 0;
+
+// ─── Player ───────────────────────────────────────────────────────────────────
+const player = {
+  x: 320, y: 390,
+  w: 20, h: 32,
+  speed: 2.5,
+  facing: 'down', // 'up'|'down'|'left'|'right'
+  walkFrame: 0,
+  walkTimer: 0,
+};
+
+// ─── Map Tiles ────────────────────────────────────────────────────────────────
+// Tile types: 0=grass, 1=path, 2=sidewalk
+const TILE = 32;
+const COLS = Math.ceil(W / TILE);
+const ROWS = Math.ceil(H / TILE);
+
+// We'll just draw the map procedurally rather than a tile array
+
+// ─── Buildings ────────────────────────────────────────────────────────────────
+const buildings = [
+  {
+    id: 'bookstore',
+    label: 'NYU Bookstore',
+    sublabel: '726 Broadway',
+    x: 60, y: 80, w: 160, h: 110,
+    color: '#4a1080',
+    roof: '#2d0a50',
+    door: { x: 120, y: 188 },
+    sign: '📚 Bookstore',
+    interactZone: { x: 80, y: 188, w: 120, h: 30 },
+    dialogues: [
+      ["NYU Bookstore", "Welcome! Here to pick up your textbooks? 📚"],
+      ["NYU Bookstore", "Let me grab those for you... Here you go!\nYour reading list for the semester! Good luck! 💜"],
+    ],
+    doneText: "Got the textbooks! ✓",
+    required: 0,
+  },
+  {
+    id: 'paulson',
+    label: 'Paulson Center',
+    sublabel: '181 Mercer St',
+    x: 420, y: 60, w: 180, h: 120,
+    color: '#6b2090',
+    roof: '#3d0a60',
+    door: { x: 490, y: 178 },
+    sign: '🏫 Paulson Center',
+    interactZone: { x: 450, y: 178, w: 100, h: 30 },
+    dialogues: [
+      ["Professor", "Ah, come in, come in! Class is about to start!"],
+      ["Professor", "Today we're covering everything you need to know.\nMake sure you have your textbooks! 📖"],
+      ["Professor", "Excellent work today. Don't forget to study at Bobst!\nClass dismissed! 🎓"],
+    ],
+    doneText: "Attended class! ✓",
+    required: 1,
+  },
+  {
+    id: 'bobst',
+    label: 'Bobst Library',
+    sublabel: '70 Washington Sq S',
+    x: 50, y: 270, w: 190, h: 120,
+    color: '#8B1A1A',
+    roof: '#5a0f0f',
+    door: { x: 130, y: 388 },
+    sign: '📖 Bobst Library',
+    interactZone: { x: 80, y: 388, w: 120, h: 30 },
+    dialogues: [
+      ["Bobst Library", "Shhh... Welcome to Bobst! 📖"],
+      ["Bobst Library", "You crack open your textbooks and study hard.\nHours pass... pages turn..."],
+      ["Bobst Library", "You've mastered the material! Now go celebrate —\nWashington Square Park is waiting! 🌳"],
+    ],
+    doneText: "Studied hard! ✓",
+    required: 2,
+  },
+];
+
+// ─── Washington Square Park + Arch ────────────────────────────────────────────
+const wsp = { x: 370, y: 240, w: 240, h: 200 };
+const arch = { x: 460, y: 248, w: 60, h: 70 };
+const archInteract = { x: 450, y: 310, w: 80, h: 30 };
+const archDialogues = [
+  ["Washington Square Park", "You step under the iconic NYU arch... 🌳"],
+  ["Washington Square Park", "The sun is shining. Your gown billows in the breeze.\nYou made it through everything!"],
+  ["You", "...I DID IT!!! 🎓🎉"],
+];
+
+// ─── Trees ────────────────────────────────────────────────────────────────────
+const trees = [
+  {x:15,y:15}, {x:55,y:15}, {x:270,y:15}, {x:310,y:15}, {x:360,y:15},
+  {x:600,y:15}, {x:15,y:240}, {x:15,y:440}, {x:600,y:440},
+  {x:280,y:150}, {x:340,y:200}, {x:280,y:430}, {x:340,y:430},
+];
+
+// ─── Flowers / decoration ─────────────────────────────────────────────────────
+const flowers = [];
+for (let i = 0; i < 40; i++) {
+  flowers.push({ x: 30 + Math.floor(Math.random() * 580), y: 30 + Math.floor(Math.random() * 420) });
+}
+
+// ─── Collision helpers ────────────────────────────────────────────────────────
+function rectsOverlap(ax,ay,aw,ah, bx,by,bw,bh) {
+  return ax < bx+bw && ax+aw > bx && ay < by+bh && ay+ah > by;
+}
+function playerInZone(zone) {
+  return rectsOverlap(player.x - player.w/2, player.y - player.h,
+                      player.w, player.h,
+                      zone.x, zone.y, zone.w, zone.h);
+}
+function collidesBuilding(nx, ny) {
+  for (const b of buildings) {
+    if (rectsOverlap(nx - player.w/2, ny - player.h, player.w, player.h,
+                     b.x, b.y, b.w, b.h - 5)) return true;
+  }
+  return false;
+}
+
+// ─── Dialogue system ──────────────────────────────────────────────────────────
+let currentDialogueSrc = null;
+function startDialogue(lines, src) {
+  dialogueQueue = lines;
+  dialoguePage  = 0;
+  currentDialogueSrc = src;
+  state = 'dialogue';
+  showDialoguePage();
+  document.getElementById('controls-hint').style.display = 'none';
+}
+function showDialoguePage() {
+  const dlg = document.getElementById('dialogue');
+  const [speaker, text] = dialogueQueue[dialoguePage];
+  document.getElementById('dlg-speaker').textContent = speaker;
+  document.getElementById('dlg-text').textContent    = text;
+  dlg.style.display = 'block';
+}
+function advanceDialogue() {
+  dialoguePage++;
+  if (dialoguePage >= dialogueQueue.length) {
+    document.getElementById('dialogue').style.display = 'none';
+    document.getElementById('controls-hint').style.display = 'block';
+    state = 'playing';
+    if (currentDialogueSrc === 'arch') {
+      startCelebration();
+    } else {
+      // mark building done
+      progress++;
+      updateHUD();
+    }
+    currentDialogueSrc = null;
+  } else {
+    showDialoguePage();
+  }
+}
+
+// ─── HUD ──────────────────────────────────────────────────────────────────────
+function updateHUD() {
+  const ids = ['s0','s1','s2','s3'];
+  ids.forEach((id, i) => {
+    const el = document.getElementById(id);
+    el.className = 'step';
+    if (i < progress) el.classList.add('done');
+    else if (i === progress) el.classList.add('active');
+  });
+}
+
+// ─── Celebration ─────────────────────────────────────────────────────────────
+function startCelebration() {
+  state = 'celebrating';
+  celebrateTimer = 0;
+  jumpY = 0;
+  jumpVel = -12;
+  jumpCount = 0;
+  updateHUD(); // mark all done
+}
+
+// ─── Drawing ──────────────────────────────────────────────────────────────────
+
+function drawGrass() {
+  // Base grass
+  ctx.fillStyle = '#6abf4b';
+  ctx.fillRect(0, 0, W, H);
+
+  // Slightly varied grass patches
+  ctx.fillStyle = '#74cc52';
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      if ((r + c) % 3 === 0) ctx.fillRect(c*TILE, r*TILE, TILE, TILE);
+    }
+  }
+}
+
+function drawPaths() {
+  ctx.fillStyle = '#d4c8a0';
+  // Main horizontal path
+  ctx.fillRect(0, 400, W, 40);
+  // Vertical path center
+  ctx.fillRect(300, 200, 50, 200);
+  // Path to bookstore
+  ctx.fillRect(60, 200, 160, 200);
+  // Path to paulson
+  ctx.fillRect(430, 180, 90, 220);
+  // Sidewalk around WSP
+  ctx.fillStyle = '#c8bfa0';
+  ctx.fillRect(370, 240, 240, 200);
+  // Path from bobst to arch
+  ctx.fillRect(240, 350, 230, 50);
+}
+
+function drawFlowers() {
+  const colors = ['#ff6b6b','#ffd93d','#ff9ff3','#74b9ff','#fff'];
+  flowers.forEach((f, i) => {
+    // Avoid drawing on buildings
+    let onBuilding = false;
+    for (const b of buildings) {
+      if (f.x > b.x && f.x < b.x+b.w && f.y > b.y && f.y < b.y+b.h) {
+        onBuilding = true; break;
+      }
+    }
+    if (onBuilding) return;
+    if (f.x > wsp.x && f.x < wsp.x+wsp.w && f.y > wsp.y && f.y < wsp.y+wsp.h) {
+      // Inside park — draw park flowers
+      ctx.fillStyle = '#ffaad4';
+    } else {
+      ctx.fillStyle = colors[i % colors.length];
+    }
+    ctx.beginPath();
+    ctx.arc(f.x, f.y, 3, 0, Math.PI*2);
+    ctx.fill();
+  });
+}
+
+function drawTree(x, y) {
+  // Trunk
+  ctx.fillStyle = '#8B6914';
+  ctx.fillRect(x + 6, y + 18, 8, 10);
+  // Shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.15)';
+  ctx.beginPath();
+  ctx.ellipse(x + 10, y + 28, 10, 5, 0, 0, Math.PI*2);
+  ctx.fill();
+  // Leaves (3 circles)
+  ctx.fillStyle = '#2d7a2d';
+  ctx.beginPath(); ctx.arc(x+10, y+14, 11, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#3a9a3a';
+  ctx.beginPath(); ctx.arc(x+5,  y+10, 8, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(x+15, y+10, 8, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#52b852';
+  ctx.beginPath(); ctx.arc(x+10, y+6, 7, 0, Math.PI*2); ctx.fill();
+}
+
+function drawWashingtonSquarePark() {
+  // Park ground
+  ctx.fillStyle = '#7dcf5a';
+  ctx.fillRect(wsp.x, wsp.y, wsp.w, wsp.h);
+  // Park border
+  ctx.strokeStyle = '#4a9a30';
+  ctx.lineWidth = 3;
+  ctx.strokeRect(wsp.x, wsp.y, wsp.w, wsp.h);
+  // Fountain (center-ish)
+  const fx = wsp.x + wsp.w/2 + 20, fy = wsp.y + wsp.h/2 + 20;
+  ctx.fillStyle = '#5ab4d4';
+  ctx.beginPath(); ctx.arc(fx, fy, 20, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#7dd4f0';
+  ctx.beginPath(); ctx.arc(fx, fy, 12, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#a0e8ff';
+  ctx.beginPath(); ctx.arc(fx, fy, 5, 0, Math.PI*2); ctx.fill();
+  // Park label
+  ctx.fillStyle = '#2d5a15';
+  ctx.font = 'bold 10px Courier New';
+  ctx.textAlign = 'center';
+  ctx.fillText('Washington Square Park', wsp.x + wsp.w/2, wsp.y + 15);
+  // Trees in park
+  drawTree(wsp.x + 10, wsp.y + 20);
+  drawTree(wsp.x + wsp.w - 30, wsp.y + 20);
+  drawTree(wsp.x + 10, wsp.y + wsp.h - 30);
+  drawTree(wsp.x + wsp.w - 30, wsp.y + wsp.h - 35);
+  // Park path
+  ctx.fillStyle = '#c8bfa0';
+  ctx.fillRect(arch.x + arch.w/2 - 8, arch.y + arch.h, 16, wsp.h - (arch.y - wsp.y) - arch.h - 5);
+  ctx.textAlign = 'left';
+}
+
+function drawArch() {
+  const {x, y, w, h} = arch;
+  // Shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.2)';
+  ctx.fillRect(x+4, y+4, w, h);
+  // Arch body
+  ctx.fillStyle = '#f0e6c8';
+  ctx.fillRect(x, y + h*0.35, w*0.22, h*0.65);   // left pillar
+  ctx.fillRect(x + w*0.78, y + h*0.35, w*0.22, h*0.65); // right pillar
+  // Arch curved top
+  ctx.beginPath();
+  ctx.moveTo(x, y + h*0.35);
+  ctx.quadraticCurveTo(x + w/2, y - 10, x + w, y + h*0.35);
+  ctx.lineTo(x + w, y + h*0.55);
+  ctx.quadraticCurveTo(x + w/2, y + h*0.2, x, y + h*0.55);
+  ctx.closePath();
+  ctx.fillStyle = '#e8d8b0';
+  ctx.fill();
+  ctx.strokeStyle = '#b8a070';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  // NYU torch logo hint
+  ctx.fillStyle = '#57106e';
+  ctx.font = 'bold 8px Courier New';
+  ctx.textAlign = 'center';
+  ctx.fillText('NYU', x + w/2, y + h*0.25);
+  ctx.textAlign = 'left';
+  // Interact prompt if near
+  if (progress === 3 && playerInZone(archInteract)) {
+    drawInteractPrompt(x + w/2, y - 5);
+  }
+}
+
+function drawBuilding(b) {
+  // Shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.18)';
+  ctx.fillRect(b.x + 5, b.y + 5, b.w, b.h);
+  // Main body
+  ctx.fillStyle = b.color;
+  ctx.fillRect(b.x, b.y, b.w, b.h);
+  // Roof / top stripe
+  ctx.fillStyle = b.roof;
+  ctx.fillRect(b.x, b.y, b.w, 18);
+  // Windows
+  ctx.fillStyle = '#c8e8ff';
+  const wCols = Math.floor((b.w - 20) / 30);
+  for (let wc = 0; wc < wCols; wc++) {
+    const wx = b.x + 15 + wc * 30;
+    // row 1 window
+    ctx.fillRect(wx, b.y + 25, 18, 14);
+    ctx.strokeStyle = '#ffffff44';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(wx, b.y + 25, 18, 14);
+    // row 2 window
+    if (b.h > 80) {
+      ctx.fillRect(wx, b.y + 48, 18, 14);
+      ctx.strokeRect(wx, b.y + 48, 18, 14);
+    }
+  }
+  // Door
+  ctx.fillStyle = '#8B5E3C';
+  const dw = 20, dh = 28;
+  ctx.fillRect(b.door.x - dw/2, b.door.y - dh, dw, dh);
+  ctx.fillStyle = '#6B3E1C';
+  ctx.fillRect(b.door.x - dw/2, b.door.y - dh, dw, 3);
+  // Door knob
+  ctx.fillStyle = '#f5d76e';
+  ctx.beginPath();
+  ctx.arc(b.door.x + 6, b.door.y - dh/2, 2, 0, Math.PI*2);
+  ctx.fill();
+  // Sign
+  ctx.fillStyle = '#f5d76e';
+  ctx.fillRect(b.x + 5, b.y + 18, b.w - 10, 16);
+  ctx.fillStyle = '#2a1a00';
+  ctx.font = 'bold 9px Courier New';
+  ctx.textAlign = 'center';
+  ctx.fillText(b.label, b.x + b.w/2, b.y + 29);
+  ctx.font = '8px Courier New';
+  ctx.fillStyle = '#554433';
+  ctx.fillText(b.sublabel, b.x + b.w/2, b.y + 37);
+  ctx.textAlign = 'left';
+  // Done checkmark
+  if (buildings.indexOf(b) < progress) {
+    ctx.fillStyle = '#3a8a3a';
+    ctx.font = 'bold 20px Courier New';
+    ctx.textAlign = 'center';
+    ctx.fillText('✓', b.x + b.w - 16, b.y + 16);
+    ctx.textAlign = 'left';
+  }
+  // Interact prompt
+  if (buildings.indexOf(b) === progress && playerInZone(b.interactZone)) {
+    drawInteractPrompt(b.door.x, b.door.y - 36);
+  }
+}
+
+function drawInteractPrompt(x, y) {
+  ctx.fillStyle = '#f5d76e';
+  ctx.strokeStyle = '#57106e';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.roundRect(x - 28, y - 14, 56, 18, 6);
+  ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#2a1a00';
+  ctx.font = 'bold 9px Courier New';
+  ctx.textAlign = 'center';
+  ctx.fillText('[ SPACE ]', x, y);
+  ctx.textAlign = 'left';
+}
+
+function drawTrees() {
+  trees.forEach(t => drawTree(t.x, t.y));
+}
+
+// ─── Character drawing ────────────────────────────────────────────────────────
+function drawCharacter(cx, cy, jumpOffset, celebrateMode) {
+  const x = cx, y = cy - jumpOffset;
+  const scale = 1;
+
+  ctx.save();
+  ctx.translate(x, y);
+
+  // Shadow
+  if (jumpOffset > 0) {
+    ctx.fillStyle = 'rgba(0,0,0,0.25)';
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 10 + jumpOffset*0.3, 5, 0, 0, Math.PI*2);
+    ctx.fill();
+    ctx.translate(0, -jumpOffset * 0); // already offset above
+  }
+
+  // Gown body (purple)
+  ctx.fillStyle = '#7B2FBE';
+  // Gown widens at bottom — draw trapezoid-ish
+  ctx.beginPath();
+  ctx.moveTo(-9, -28);
+  ctx.lineTo(9, -28);
+  ctx.lineTo(13, 0);
+  ctx.lineTo(-13, 0);
+  ctx.closePath();
+  ctx.fill();
+  // Gown front stripe
+  ctx.fillStyle = '#9b4fde';
+  ctx.fillRect(-3, -26, 6, 26);
+  // Sleeves
+  ctx.fillStyle = '#7B2FBE';
+  ctx.fillRect(-14, -26, 7, 16);
+  ctx.fillRect(7, -26, 7, 16);
+
+  // Walk animation: legs
+  const legSwing = (state === 'playing') ? Math.sin(player.walkFrame * 0.4) * 4 : 0;
+  ctx.fillStyle = '#5a1a8e';
+  // Left leg
+  ctx.fillRect(-8, 0, 7, 12 + (state==='playing' ? legSwing : 0));
+  // Right leg
+  ctx.fillRect(1, 0, 7, 12 - (state==='playing' ? legSwing : 0));
+
+  // Shoes
+  ctx.fillStyle = '#1a1a1a';
+  ctx.fillRect(-9, 10 + (state==='playing' ? legSwing : 0), 9, 4);
+  ctx.fillRect(0,  10 - (state==='playing' ? legSwing : 0), 9, 4);
+
+  // Neck
+  ctx.fillStyle = '#c68642';
+  ctx.fillRect(-3, -32, 6, 6);
+
+  // Head
+  ctx.fillStyle = '#d4956a';
+  ctx.beginPath();
+  ctx.ellipse(0, -40, 11, 12, 0, 0, Math.PI*2);
+  ctx.fill();
+
+  // Curly dark brown hair — cluster of small circles
+  ctx.fillStyle = '#3d1c02';
+  const hairCurls = [
+    [-9, -48, 5], [-4, -52, 5], [2, -53, 5], [7, -50, 5],
+    [10, -46, 4], [-11, -44, 4], [-7, -44, 4],
+  ];
+  hairCurls.forEach(([hx, hy, hr]) => {
+    ctx.beginPath();
+    ctx.arc(hx, hy, hr, 0, Math.PI*2);
+    ctx.fill();
+  });
+  // Hair top coverage
+  ctx.fillStyle = '#3d1c02';
+  ctx.beginPath();
+  ctx.ellipse(0, -48, 10, 6, 0, 0, Math.PI*2);
+  ctx.fill();
+
+  // Graduation cap (black mortarboard)
+  // Cap base / band
+  ctx.fillStyle = '#111';
+  ctx.fillRect(-10, -53, 20, 6);
+  // Cap flat top (wider board)
+  ctx.fillStyle = '#1a1a1a';
+  ctx.fillRect(-14, -56, 28, 5);
+  // Tassel
+  ctx.strokeStyle = '#f5d76e';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(12, -54);
+  ctx.lineTo(15, -48);
+  ctx.lineTo(15, -42);
+  ctx.stroke();
+  // Tassel end
+  ctx.fillStyle = '#f5d76e';
+  ctx.beginPath();
+  ctx.arc(15, -41, 3, 0, Math.PI*2);
+  ctx.fill();
+
+  // Glasses (black frames)
+  ctx.fillStyle = '#111';
+  // Left lens
+  ctx.strokeStyle = '#111';
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(-9, -43, 7, 5);
+  // Right lens
+  ctx.strokeRect(2, -43, 7, 5);
+  // Bridge
+  ctx.beginPath();
+  ctx.moveTo(-2, -40);
+  ctx.lineTo(2, -40);
+  ctx.stroke();
+  // Side arms
+  ctx.beginPath();
+  ctx.moveTo(-9, -40);
+  ctx.lineTo(-12, -40);
+  ctx.moveTo(9, -40);
+  ctx.lineTo(12, -40);
+  ctx.stroke();
+
+  // Textbooks under arm (after picking up)
+  if (progress >= 1) {
+    ctx.fillStyle = '#e04040';
+    ctx.fillRect(9, -18, 10, 13);
+    ctx.fillStyle = '#fff';
+    ctx.font = '5px Courier New';
+    ctx.fillText('NYU', 10, -8);
+    ctx.fillStyle = '#2060c0';
+    ctx.fillRect(9, -5, 10, 10);
+    ctx.fillStyle = '#fff';
+    ctx.fillText('101', 10, 3);
+  }
+
+  ctx.restore();
+}
+
+// ─── Update ───────────────────────────────────────────────────────────────────
+let lastTime = 0;
+function update(ts) {
+  const dt = ts - lastTime;
+  lastTime = ts;
+
+  if (state === 'playing') {
+    let dx = 0, dy = 0;
+    if (keys['ArrowLeft']  || keys['a']) { dx = -player.speed; player.facing = 'left'; }
+    if (keys['ArrowRight'] || keys['d']) { dx =  player.speed; player.facing = 'right'; }
+    if (keys['ArrowUp']    || keys['w']) { dy = -player.speed; player.facing = 'up'; }
+    if (keys['ArrowDown']  || keys['s']) { dy =  player.speed; player.facing = 'down'; }
+
+    if (dx !== 0 || dy !== 0) {
+      // Normalize diagonal
+      if (dx !== 0 && dy !== 0) { dx *= 0.707; dy *= 0.707; }
+
+      const nx = Math.max(12, Math.min(W - 12, player.x + dx));
+      const ny = Math.max(32, Math.min(H - 10, player.y + dy));
+
+      if (!collidesBuilding(nx, player.y)) player.x = nx;
+      if (!collidesBuilding(player.x, ny)) player.y = ny;
+
+      // Prevent walking into WSP before arch is the goal
+      if (progress < 3) {
+        if (rectsOverlap(player.x - player.w/2, player.y - player.h, player.w, player.h,
+                         wsp.x, wsp.y, wsp.w, wsp.h)) {
+          // push back
+          if (player.x < wsp.x + wsp.w/2) player.x = wsp.x - player.w/2 - 1;
+          else player.x = wsp.x + wsp.w + player.w/2 + 1;
+        }
+      }
+
+      player.walkTimer += Math.abs(dx) + Math.abs(dy);
+      if (player.walkTimer > 4) { player.walkFrame++; player.walkTimer = 0; }
+    }
+
+    // Interactions
+    if (spaceJustPressed) {
+      for (const b of buildings) {
+        if (buildings.indexOf(b) === progress && playerInZone(b.interactZone)) {
+          startDialogue(b.dialogues, b.id);
+          break;
+        }
+      }
+      if (progress === 3 && playerInZone(archInteract)) {
+        startDialogue(archDialogues, 'arch');
+      }
+    }
+  } else if (state === 'dialogue') {
+    if (spaceJustPressed) advanceDialogue();
+  } else if (state === 'celebrating') {
+    celebrateTimer++;
+    jumpY -= jumpVel;
+    jumpVel += 0.6;
+    if (jumpVel > 0 && jumpY >= 0) {
+      jumpY = 0; jumpVel = 0;
+      jumpCount++;
+      if (jumpCount < 3) {
+        setTimeout(() => { jumpVel = -10; }, 200);
+      } else {
+        state = 'won';
+        winTimer = 0;
+      }
+    }
+  } else if (state === 'won') {
+    winTimer++;
+    if (winTimer === 60) {
+      const ws = document.getElementById('win-screen');
+      ws.style.display = 'flex';
+    }
+  }
+
+  spaceJustPressed = false;
+}
+
+// ─── Draw order label ─────────────────────────────────────────────────────────
+function drawNextObjective() {
+  const labels = [
+    '→ Go to the NYU Bookstore',
+    '→ Head to Paulson Center for class',
+    '→ Study at Bobst Library',
+    '→ Walk through Washington Square Park arch!',
+  ];
+  if (state === 'playing' && progress < 4) {
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.beginPath();
+    ctx.roundRect(8, H - 22, ctx.measureText(labels[progress]).width + 16, 18, 5);
+    ctx.fill();
+    ctx.fillStyle = '#f5d76e';
+    ctx.font = '10px Courier New';
+    ctx.fillText(labels[progress], 16, H - 9);
+  }
+}
+
+// ─── Render ───────────────────────────────────────────────────────────────────
+function render() {
+  ctx.clearRect(0, 0, W, H);
+  drawGrass();
+  drawPaths();
+  drawFlowers();
+  drawTrees();
+  drawWashingtonSquarePark();
+
+  // Draw buildings (back to front by y position)
+  const sortedBuildings = [...buildings].sort((a, b) => a.y - b.y);
+  sortedBuildings.forEach(b => drawBuilding(b));
+
+  drawArch();
+
+  // Draw player (with jump offset for celebrate)
+  const jOffset = (state === 'celebrating' || state === 'won') ? Math.max(0, -jumpY) : 0;
+  drawCharacter(player.x, player.y, jOffset, state === 'celebrating');
+
+  drawNextObjective();
+}
+
+// ─── Game Loop ────────────────────────────────────────────────────────────────
+function loop(ts) {
+  update(ts);
+  render();
+  requestAnimationFrame(loop);
+}
+
+// ─── Init ─────────────────────────────────────────────────────────────────────
+updateHUD();
+requestAnimationFrame(loop);
+
+// Intro dialogue
+setTimeout(() => {
+  startDialogue([
+    ["NYU Campus", "Welcome to NYU! 🎓 It's graduation day!"],
+    ["NYU Campus", "But first — you need to pick up your textbooks,\nattend your last class, and study hard!"],
+    ["NYU Campus", "Use arrow keys to walk around.\nPress SPACE to interact with buildings. Good luck! 💜"],
+  ], 'intro');
+}, 300);
+</script>
+</body>
+</html>
